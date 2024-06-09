@@ -63,6 +63,8 @@ void main() {
     
     agents[idx].Position.x = dimensions.x / 2.0 + RandomRadius * cos(RandomAngle);
     agents[idx].Position.y = dimensions.y / 2.0 + RandomRadius * -sin(RandomAngle);
+    
+    // agents[idx].Rotation = RandomAngle;
     agents[idx].Rotation = RandomAngle + 3.14159265359;
 }
 )";
@@ -95,6 +97,7 @@ uniform float agentVelocity;
 uniform float agentTurnSpeed;
 uniform float agentSensorLength;
 uniform float agentSensorAngle;
+uniform int agentSensorSize;
 uniform uvec2 dimensions;
 
 float sense(FPoint2D position, float rotation, float angle) {
@@ -104,13 +107,27 @@ float sense(FPoint2D position, float rotation, float angle) {
         position.y + agentSensorLength * -sin(sensorAngle)
     );
     
-    if (sensorPosition.x < 0 || sensorPosition.x >= dimensions.x ||
-        sensorPosition.y < 0 || sensorPosition.y >= dimensions.y) {
-        return 0.0;
-    }
+    float sum = 0.0f;
+    for(int j = -agentSensorSize; j <= agentSensorSize; ++j) {
+        for(int i = -agentSensorSize; i <= agentSensorSize; ++i) {
+            FPoint2D samplePosition = FPoint2D(
+                sensorPosition.x + i,
+                sensorPosition.y + j
+            );
+
+            if (samplePosition.x < 0 || samplePosition.x >= dimensions.x ||
+                samplePosition.y < 0 || samplePosition.y >= dimensions.y) {
+                return 0.0;
+            }
+
+            uint sampleIndex = uint(sensorPosition.y) * dimensions.x + uint(sensorPosition.x);
+
+            sum += trailMap[sampleIndex];
+        }
+    }    
     
-    uint sensorIndex = uint(sensorPosition.y) * dimensions.x + uint(sensorPosition.x);
-    return trailMap[sensorIndex];
+    
+    return sum;
 }
 
 void main() {
@@ -203,6 +220,7 @@ layout (std430, binding = 2) buffer TrailMapCopyBuffer {
 uniform float decayRate;
 uniform float diffusionRate;
 uniform uvec2 dimensions;
+uniform int diffusionSize;
 
 void main() {
     uint idx = gl_GlobalInvocationID.x;
@@ -212,8 +230,9 @@ void main() {
     uint y = idx / dimensions.x;
     
     float sum = 0.0;
-    for (int j = -1; j <= 1; ++j) {
-        for (int i = -1; i <= 1; ++i) {
+    
+    for (int j = -diffusionSize; j <= diffusionSize; ++j) {
+        for (int i = -diffusionSize; i <= diffusionSize; ++i) {
             int nx = int(x) + i;
             int ny = int(y) + j;
             if (nx >= 0 && nx < dimensions.x && ny >= 0 && ny < dimensions.y) {
@@ -222,7 +241,7 @@ void main() {
             }
         }
     }
-    float blur = sum / 9.0;
+    float blur = sum / ((diffusionSize * 2 + 1)*(diffusionSize * 2 + 1));
     float diffused = mix(trailMap[idx], blur, diffusionRate);
     trailMap[idx] = diffused * decayRate;
 }
@@ -309,6 +328,7 @@ int main() {
 
     // Make the window's context current
     glfwMakeContextCurrent(window);
+    glfwSwapInterval(0);
 
     // Initialize GLEW
     glewExperimental = GL_TRUE;
@@ -369,6 +389,7 @@ int main() {
         glUniform1f(glGetUniformLocation(updateAgentsProgram, "agentTurnSpeed"), 0.2f);
         glUniform1f(glGetUniformLocation(updateAgentsProgram, "agentSensorLength"), 10.0f);
         glUniform1f(glGetUniformLocation(updateAgentsProgram, "agentSensorAngle"), 0.0174532925f * 20.0f);
+        glUniform1i(glGetUniformLocation(updateAgentsProgram, "agentSensorSize"), 0);
         glUniform2uiv(glGetUniformLocation(updateAgentsProgram, "dimensions"), 1, glm::value_ptr(glm::uvec2(WIDTH, HEIGHT)));
         glDispatchCompute((AGENT_COUNT + 1023) / 1024, 1, 1);
         glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
@@ -383,6 +404,7 @@ int main() {
         glUseProgram(processTrailMapProgram);
         glUniform1f(glGetUniformLocation(processTrailMapProgram, "decayRate"), 0.999f);
         glUniform1f(glGetUniformLocation(processTrailMapProgram, "diffusionRate"), 0.13f);
+        glUniform1i(glGetUniformLocation(processTrailMapProgram, "diffusionSize"), 1);
         glUniform2uiv(glGetUniformLocation(processTrailMapProgram, "dimensions"), 1, glm::value_ptr(glm::uvec2(WIDTH, HEIGHT)));
         glDispatchCompute((WIDTH * HEIGHT + 1023) / 1024, 1, 1);
         glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
