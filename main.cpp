@@ -2,6 +2,8 @@
 #include <GLFW/glfw3.h>
 #include <iostream>
 #include <vector>
+#include <Windows.h>
+#include <commctrl.h>
 #include <chrono>
 #include <random>
 #include <cmath>
@@ -264,7 +266,7 @@ uniform uvec2 dimensions;
 
 uvec3 encodeColor(float value) {
     uint intensity = uint(value * 255);
-    return uvec3(intensity, intensity, intensity);
+    return uvec3(0, intensity, 0);
 }
 
 void main() {
@@ -311,13 +313,39 @@ GLuint createComputeProgram(const char* source) {
     return program;
 }
 
+typedef struct WindowParam {
+    float *agentVelocity;
+    float *agentTurnSpeed;
+    float *agentSensorLength;
+    float *agentSensorAngle;
+    float *agentSensorSize;
+
+    float *decayRate;
+    float *diffusionRate;
+    float *diffusionSize;
+} WindowParam;
+
+HWND g_hButton;
+HWND g_hSliderAgentVelocity;
+HWND g_hSliderAgentTurnSpeed;
+HWND g_hSliderAgentSensorLength;
+HWND g_hSliderAgentSensorAngle;
+HWND g_hSliderAgentSensorSize;
+HWND g_hSliderDecayRate;
+HWND g_hSliderDiffusionRate;
+HWND g_hSliderDiffusionSize;
+WindowParam WindowParameter;
+
+DWORD WINAPI ThreadProc(LPVOID lpParameter);
+LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);
+
 int main() {
     // Initialize GLFW
     if (!glfwInit()) {
         std::cerr << "Failed to initialize GLFW" << std::endl;
         return ERROR_INIT_FAILED;
     }
-    
+
     // Create a windowed mode window and its OpenGL context
     GLFWwindow* window = glfwCreateWindow(WIDTH, HEIGHT, "Slime Mold Simulation", nullptr, nullptr);
     if (!window) {
@@ -336,6 +364,7 @@ int main() {
         std::cerr << "Failed to initialize GLEW" << std::endl;
         return ERROR_INIT_FAILED;
     }
+    printf("OpenGL Version: %s\n", glGetString(GL_VERSION));
 
     // Create and bind SSBOs for agents and trail map
     GLuint agentsBuffer, trailMapBuffer, trailMapCopyBuffer, displayBuffer;
@@ -373,7 +402,29 @@ int main() {
     glDispatchCompute((AGENT_COUNT + 1023) / 1024, 1, 1);
     glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
 
-    // Main loop
+    float agentVelocity = 1.0f;
+    float agentTurnSpeed = 0.2f;
+    float agentSensorLength = 10.0f;
+    float agentSensorAngle = 0.0174532925f * 20.0f;
+    float agentSensorSize = 0;
+
+    float decayRate = 0.999f;
+    float diffusionRate = 0.13f;
+    float diffusionSize = 1;
+
+    WindowParameter = {
+        .agentVelocity = &agentVelocity,
+        .agentTurnSpeed = &agentTurnSpeed,
+        .agentSensorLength = &agentSensorLength,
+        .agentSensorAngle = &agentSensorAngle,
+        .agentSensorSize = &agentSensorSize,
+        .decayRate = &decayRate,
+        .diffusionRate = &diffusionRate,
+        .diffusionSize = &diffusionSize
+    };
+
+    HANDLE hThread = CreateThread(NULL, 0, ThreadProc, NULL, 0, NULL);
+    
     auto lastTime = std::chrono::high_resolution_clock::now();
     while (!glfwWindowShouldClose(window)) {
         // Compute delta time
@@ -382,14 +433,15 @@ int main() {
         lastTime = currentTime;
         float deltaTime = elapsedTime.count();
 
+
         // Update agents
         glUseProgram(updateAgentsProgram);
         glUniform1f(glGetUniformLocation(updateAgentsProgram, "deltaTime"), deltaTime);
-        glUniform1f(glGetUniformLocation(updateAgentsProgram, "agentVelocity"), 1.0f);
-        glUniform1f(glGetUniformLocation(updateAgentsProgram, "agentTurnSpeed"), 0.2f);
-        glUniform1f(glGetUniformLocation(updateAgentsProgram, "agentSensorLength"), 10.0f);
-        glUniform1f(glGetUniformLocation(updateAgentsProgram, "agentSensorAngle"), 0.0174532925f * 20.0f);
-        glUniform1i(glGetUniformLocation(updateAgentsProgram, "agentSensorSize"), 0);
+        glUniform1f(glGetUniformLocation(updateAgentsProgram, "agentVelocity"), agentVelocity);
+        glUniform1f(glGetUniformLocation(updateAgentsProgram, "agentTurnSpeed"), agentTurnSpeed);
+        glUniform1f(glGetUniformLocation(updateAgentsProgram, "agentSensorLength"), agentSensorLength);
+        glUniform1f(glGetUniformLocation(updateAgentsProgram, "agentSensorAngle"), agentSensorAngle);
+        glUniform1i(glGetUniformLocation(updateAgentsProgram, "agentSensorSize"), agentSensorSize);
         glUniform2uiv(glGetUniformLocation(updateAgentsProgram, "dimensions"), 1, glm::value_ptr(glm::uvec2(WIDTH, HEIGHT)));
         glDispatchCompute((AGENT_COUNT + 1023) / 1024, 1, 1);
         glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
@@ -402,9 +454,9 @@ int main() {
 
         // Process trail map
         glUseProgram(processTrailMapProgram);
-        glUniform1f(glGetUniformLocation(processTrailMapProgram, "decayRate"), 0.999f);
-        glUniform1f(glGetUniformLocation(processTrailMapProgram, "diffusionRate"), 0.13f);
-        glUniform1i(glGetUniformLocation(processTrailMapProgram, "diffusionSize"), 1);
+        glUniform1f(glGetUniformLocation(processTrailMapProgram, "decayRate"), decayRate);
+        glUniform1f(glGetUniformLocation(processTrailMapProgram, "diffusionRate"), diffusionRate);
+        glUniform1i(glGetUniformLocation(processTrailMapProgram, "diffusionSize"), diffusionSize);
         glUniform2uiv(glGetUniformLocation(processTrailMapProgram, "dimensions"), 1, glm::value_ptr(glm::uvec2(WIDTH, HEIGHT)));
         glDispatchCompute((WIDTH * HEIGHT + 1023) / 1024, 1, 1);
         glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
@@ -437,8 +489,162 @@ int main() {
     glDeleteProgram(processTrailMapProgram);
     glDeleteProgram(renderTrailMapProgram);
 
+    CloseHandle(hThread);
+
     glfwDestroyWindow(window);
     glfwTerminate();
 
+    return 0;
+}
+
+DWORD WINAPI ThreadProc(LPVOID lpParameter) {
+    HINSTANCE hInstance = GetModuleHandle(NULL);
+
+    // Register window class
+    WNDCLASSW wc = {0};
+    wc.lpfnWndProc = WndProc;
+    wc.hInstance = hInstance;
+    wc.hbrBackground = (HBRUSH)(COLOR_BACKGROUND);
+    wc.lpszClassName = L"MyWindowClass";
+
+    RegisterClassW(&wc);
+
+    // Create window
+    HWND hWnd = CreateWindowExW(
+        0,
+        L"MyWindowClass",
+        L"Simulation Parameters",
+        WS_OVERLAPPEDWINDOW,
+        CW_USEDEFAULT, CW_USEDEFAULT, 560, 520,
+        NULL,
+        NULL,
+        hInstance,
+        NULL
+    );
+
+    ShowWindow(hWnd, SW_SHOW);
+    UpdateWindow(hWnd); 
+
+    // Create sliders and labels
+    CreateWindowW(L"STATIC", L"Agent Velocity", WS_CHILD | WS_VISIBLE, 50, 50, 200, 20, hWnd, NULL, hInstance, NULL);
+    g_hSliderAgentVelocity = CreateWindow(TRACKBAR_CLASS, NULL, WS_CHILD | WS_VISIBLE | TBS_HORZ, 250, 50, 200, 30, hWnd, NULL, hInstance, NULL);
+    CreateWindowW(L"STATIC", L"1.0", WS_CHILD | WS_VISIBLE, 450, 50, 40, 20, hWnd, (HMENU)1, hInstance, NULL);
+    SendMessage(g_hSliderAgentVelocity, TBM_SETRANGE, TRUE, MAKELPARAM(0, 100));
+    SendMessage(g_hSliderAgentVelocity, TBM_SETPOS, TRUE, 10);
+
+    CreateWindowW(L"STATIC", L"Agent Turn Speed", WS_CHILD | WS_VISIBLE, 50, 100, 200, 20, hWnd, NULL, hInstance, NULL);
+    g_hSliderAgentTurnSpeed = CreateWindow(TRACKBAR_CLASS, NULL, WS_CHILD | WS_VISIBLE | TBS_HORZ, 250, 100, 200, 30, hWnd, NULL, hInstance, NULL);
+    CreateWindowW(L"STATIC", L"0.2", WS_CHILD | WS_VISIBLE, 450, 100, 40, 20, hWnd, (HMENU)2, hInstance, NULL);
+    SendMessage(g_hSliderAgentTurnSpeed, TBM_SETRANGE, TRUE, MAKELPARAM(0, 100));
+    SendMessage(g_hSliderAgentTurnSpeed, TBM_SETPOS, TRUE, 20);
+
+    CreateWindowW(L"STATIC", L"Agent Sensor Length", WS_CHILD | WS_VISIBLE, 50, 150, 200, 20, hWnd, NULL, hInstance, NULL);
+    g_hSliderAgentSensorLength = CreateWindow(TRACKBAR_CLASS, NULL, WS_CHILD | WS_VISIBLE | TBS_HORZ, 250, 150, 200, 30, hWnd, NULL, hInstance, NULL);
+    CreateWindowW(L"STATIC", L"10", WS_CHILD | WS_VISIBLE, 450, 150, 40, 20, hWnd, (HMENU)3, hInstance, NULL);
+    SendMessage(g_hSliderAgentSensorLength, TBM_SETRANGE, TRUE, MAKELPARAM(0, 100));
+    SendMessage(g_hSliderAgentSensorLength, TBM_SETPOS, TRUE, 10);
+
+    CreateWindowW(L"STATIC", L"Agent Sensor Angle", WS_CHILD | WS_VISIBLE, 50, 200, 200, 20, hWnd, NULL, hInstance, NULL);
+    g_hSliderAgentSensorAngle = CreateWindow(TRACKBAR_CLASS, NULL, WS_CHILD | WS_VISIBLE | TBS_HORZ, 250, 200, 200, 30, hWnd, NULL, hInstance, NULL);
+    CreateWindowW(L"STATIC", L"20", WS_CHILD | WS_VISIBLE, 450, 200, 40, 20, hWnd, (HMENU)4, hInstance, NULL);
+    SendMessage(g_hSliderAgentSensorAngle, TBM_SETRANGE, TRUE, MAKELPARAM(0, 360));
+    SendMessage(g_hSliderAgentSensorAngle, TBM_SETPOS, TRUE, 20);
+
+    CreateWindowW(L"STATIC", L"Agent Sensor Size", WS_CHILD | WS_VISIBLE, 50, 250, 200, 20, hWnd, NULL, hInstance, NULL);
+    g_hSliderAgentSensorSize = CreateWindow(TRACKBAR_CLASS, NULL, WS_CHILD | WS_VISIBLE | TBS_HORZ, 250, 250, 200, 30, hWnd, NULL, hInstance, NULL);
+    CreateWindowW(L"STATIC", L"0", WS_CHILD | WS_VISIBLE, 450, 250, 40, 20, hWnd, (HMENU)5, hInstance, NULL);
+    SendMessage(g_hSliderAgentSensorSize, TBM_SETRANGE, TRUE, MAKELPARAM(0, 10));
+    SendMessage(g_hSliderAgentSensorSize, TBM_SETPOS, TRUE, 0);
+
+    CreateWindowW(L"STATIC", L"Decay Rate", WS_CHILD | WS_VISIBLE, 50, 300, 200, 20, hWnd, NULL, hInstance, NULL);
+    g_hSliderDecayRate = CreateWindow(TRACKBAR_CLASS, NULL, WS_CHILD | WS_VISIBLE | TBS_HORZ, 250, 300, 200, 30, hWnd, NULL, hInstance, NULL);
+    CreateWindowW(L"STATIC", L"0.999", WS_CHILD | WS_VISIBLE, 450, 300, 40, 20, hWnd, (HMENU)6, hInstance, NULL);
+    SendMessage(g_hSliderDecayRate, TBM_SETRANGE, TRUE, MAKELPARAM(0, 1000));
+    SendMessage(g_hSliderDecayRate, TBM_SETPOS, TRUE, 999);
+
+    CreateWindowW(L"STATIC", L"Diffusion Rate", WS_CHILD | WS_VISIBLE, 50, 350, 200, 20, hWnd, NULL, hInstance, NULL);
+    g_hSliderDiffusionRate = CreateWindow(TRACKBAR_CLASS, NULL, WS_CHILD | WS_VISIBLE | TBS_HORZ, 250, 350, 200, 30, hWnd, NULL, hInstance, NULL);
+    CreateWindowW(L"STATIC", L"0.13", WS_CHILD | WS_VISIBLE, 450, 350, 40, 20, hWnd, (HMENU)7, hInstance, NULL);
+    SendMessage(g_hSliderDiffusionRate, TBM_SETRANGE, TRUE, MAKELPARAM(0, 100));
+    SendMessage(g_hSliderDiffusionRate, TBM_SETPOS, TRUE, 13);
+
+    CreateWindowW(L"STATIC", L"Diffusion Size", WS_CHILD | WS_VISIBLE, 50, 400, 200, 20, hWnd, NULL, hInstance, NULL);
+    g_hSliderDiffusionSize = CreateWindow(TRACKBAR_CLASS, NULL, WS_CHILD | WS_VISIBLE | TBS_HORZ, 250, 400, 200, 30, hWnd, NULL, hInstance, NULL);
+    CreateWindowW(L"STATIC", L"1", WS_CHILD | WS_VISIBLE, 450, 400, 40, 20, hWnd, (HMENU)8, hInstance, NULL);
+    SendMessage(g_hSliderDiffusionSize, TBM_SETRANGE, TRUE, MAKELPARAM(1, 10));
+    SendMessage(g_hSliderDiffusionSize, TBM_SETPOS, TRUE, 1);
+
+    // Show and update window
+    ShowWindow(hWnd, SW_SHOW);
+    UpdateWindow(hWnd);
+
+    // Message loop
+    MSG msg = {0};
+    while (true) {
+        while (PeekMessage(&msg, NULL, 0, 0, PM_REMOVE)) {
+            TranslateMessage(&msg);
+            DispatchMessage(&msg);
+        }
+    }
+
+    return msg.wParam;
+}
+
+// Window procedure
+LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) {
+    switch (message) {
+        case WM_DESTROY:
+            PostQuitMessage(0);
+            break;
+        case WM_HSCROLL: {
+            HWND hSlider = (HWND) lParam;
+            int pos = SendMessage(hSlider, TBM_GETPOS, 0, 0);
+            WCHAR buffer[10];
+
+            if (hSlider == g_hSliderAgentVelocity) {
+                *WindowParameter.agentVelocity = pos / 10.0f;
+                swprintf(buffer, 10, L"%.1f", pos / 10.0f);
+                SetWindowTextW(GetDlgItem(hWnd, 1), buffer);
+            }
+            else if (hSlider == g_hSliderAgentTurnSpeed) {
+                *WindowParameter.agentTurnSpeed = pos / 100.0f;
+                swprintf(buffer, 10, L"%.2f", pos / 100.0f);
+                SetWindowTextW(GetDlgItem(hWnd, 2), buffer);
+            }
+            else if (hSlider == g_hSliderAgentSensorLength) {
+                *WindowParameter.agentSensorLength = pos;
+                swprintf(buffer, 10, L"%d", pos);
+                SetWindowTextW(GetDlgItem(hWnd, 3), buffer);
+            }
+            else if (hSlider == g_hSliderAgentSensorAngle) {
+                *WindowParameter.agentSensorAngle = pos * 0.0174532925f;
+                swprintf(buffer, 10, L"%d", pos);
+                SetWindowTextW(GetDlgItem(hWnd, 4), buffer);
+            }
+            else if (hSlider == g_hSliderAgentSensorSize) {
+                *WindowParameter.agentSensorSize = pos;
+                swprintf(buffer, 10, L"%d", pos);
+                SetWindowTextW(GetDlgItem(hWnd, 5), buffer);
+            }
+            else if (hSlider == g_hSliderDecayRate) {
+                *WindowParameter.decayRate = pos / 1000.0f;
+                swprintf(buffer, 10, L"%.3f", pos / 1000.0f);
+                SetWindowTextW(GetDlgItem(hWnd, 6), buffer);
+            }
+            else if (hSlider == g_hSliderDiffusionRate) {
+                *WindowParameter.diffusionRate = pos / 100.0f;
+                swprintf(buffer, 10, L"%.2f", pos / 100.0f);
+                SetWindowTextW(GetDlgItem(hWnd, 7), buffer);
+            }
+            else if (hSlider == g_hSliderDiffusionSize) {
+                *WindowParameter.diffusionSize = pos;
+                swprintf(buffer, 10, L"%d", pos);
+                SetWindowTextW(GetDlgItem(hWnd, 8), buffer);
+            }
+            break;
+        }
+        default:
+            return DefWindowProc(hWnd, message, wParam, lParam);
+    }
     return 0;
 }
